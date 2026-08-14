@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-agenttrafficlab"
+version = "0.2.0"
+description = "LangChain middleware and two-stage dynamic MCP execution for Agent Traffic Lab"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Agent Traffic Lab" }]
+dependencies = [
+  "langchain>=1.0,<2",
+  "langchain-mcp-adapters>=0.3,<0.4",
+  "requests>=2.31,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langchain_agenttrafficlab"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
