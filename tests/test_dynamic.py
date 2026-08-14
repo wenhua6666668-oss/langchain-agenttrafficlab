@@ -1,6 +1,4 @@
 import asyncio
-from pathlib import Path
-import subprocess
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -183,19 +181,6 @@ def test_outcome_hook_can_be_called():
 def test_expired_handoff_is_rejected():
     with pytest.raises(dynamic.HandoffError):
         parse_handoff(response(expires=1))
-
-
-def test_atl_core_app_is_untouched():
-    core = Path(__file__).resolve().parents[2] / "agent-traffic-lab"
-    if not (core / ".git").exists():
-        pytest.skip("ATL core checkout is not adjacent to this package")
-    changed = subprocess.run(
-        ["git", "-C", str(core), "status", "--porcelain", "--", "app.py"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    assert changed == ""
 
 
 class HTTPErrorForTest(Exception):

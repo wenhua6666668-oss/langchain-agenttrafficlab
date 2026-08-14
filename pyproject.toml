@@ -10,11 +10,30 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Agent Traffic Lab" }]
+keywords = ["langchain", "langgraph", "mcp", "middleware", "provider-routing"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "langchain>=1.0,<2",
   "langchain-mcp-adapters>=0.3,<0.4",
   "requests>=2.31,<3",
 ]
+
+[project.urls]
+Homepage = "https://agenttrafficlab.com"
+Documentation = "https://agenttrafficlab.com"
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
