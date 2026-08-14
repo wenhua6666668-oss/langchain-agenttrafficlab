@@ -39,6 +39,8 @@ Only ATL-returned HTTPS MCP endpoints and the exact ATL-returned tool name are a
 
 When execution is complete, the caller can report the selected provider using `await executor.report_outcome(handoff, "SUCCESS", details)` with an outcome reporter such as `atl.report_outcome`.
 
+When an execution-stage MCP error is raised and an outcome reporter is configured, `run` preserves the original exception while automatically propagating existing ATL fields such as `error_code`, `failure_type`, `http_status`, provider identity, decision reference, outcome token, and `attempt_outcomes`. HTTP 402 is reported as `PAYMENT_REQUIRED`; unknown errors remain `UNKNOWN_FAILURE`.
+
 The v0.2 dynamic path does not claim caller-local tools are ATL candidates, does not infer provider identity from names, and does not provide automatic fallback or reputation management.
 
 ## Development

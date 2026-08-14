@@ -58,6 +58,85 @@ class ATLHandoff:
     expires_at_ms: int | None = None
 
 
+@dataclass(frozen=True)
+class ExecutionResult:
+    """A truthful, ATL-compatible summary of one provider execution."""
+
+    result_class: str
+    outcome_status: str
+    error_code: str | None = None
+    failure_type: str | None = None
+    http_status: int | None = None
+    value: Any = None
+
+    def attempt_outcome(self, provider_id: str) -> dict[str, Any]:
+        attempt = {
+            "provider_id": provider_id,
+            "outcome_status": self.outcome_status,
+        }
+        if self.error_code:
+            attempt["error_code"] = self.error_code
+        if self.failure_type:
+            attempt["failure_type"] = self.failure_type
+        if self.http_status is not None:
+            attempt["http_status"] = self.http_status
+        return attempt
+
+
+@dataclass(frozen=True)
+class RetryContext:
+    """Adapter-owned context carried into an existing ATL task request."""
+
+    failed_provider_id: str
+    decision_reference: str | None
+    outcome_correlation_token: str | None
+    failure: ExecutionResult
+    attempt_history: tuple[Mapping[str, Any], ...] = ()
+
+    def to_decision_task(self, task: str) -> str:
+        context = {
+            "failed_provider_id": self.failed_provider_id,
+            "decision_reference": self.decision_reference,
+            "outcome_correlation_token": self.outcome_correlation_token,
+            "failure_class": self.failure.result_class,
+            "attempt_history": [dict(item) for item in self.attempt_history],
+        }
+        return f"{task}\nATL retry context (adapter-generated, non-authoritative): {json.dumps(context, sort_keys=True)}"
+
+
+def classify_execution_error(error: BaseException) -> ExecutionResult:
+    """Map an execution exception to existing ATL outcome vocabulary."""
+    status = _exception_http_status(error)
+    if status == 402:
+        return ExecutionResult("PAYMENT_REQUIRED", "FAILURE", "PAYMENT_REQUIRED", "payment_required", 402)
+    if status in {401, 403}:
+        return ExecutionResult("AUTH_FAILURE", "FAILURE", "AUTH_INVALID", "auth_failure", status)
+    if _is_timeout(error):
+        return ExecutionResult("TIMEOUT", "FAILURE", "TIMEOUT", "provider_timeout")
+    if isinstance(status, int) and status >= 500:
+        return ExecutionResult("PROVIDER_FAILURE", "FAILURE", "PROVIDER_5XX", "provider_5xx", status)
+    return ExecutionResult("UNKNOWN_FAILURE", "FAILURE", "UNKNOWN_FAILURE", "unknown_failure")
+
+
+def _exception_http_status(error: BaseException) -> int | None:
+    if isinstance(error, BaseExceptionGroup):
+        for child in error.exceptions:
+            status = _exception_http_status(child)
+            if status is not None:
+                return status
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is None:
+        status = getattr(error, "status_code", None)
+    return int(status) if isinstance(status, int) else None
+
+
+def _is_timeout(error: BaseException) -> bool:
+    if isinstance(error, BaseExceptionGroup):
+        return any(_is_timeout(child) for child in error.exceptions)
+    return isinstance(error, (TimeoutError, asyncio.TimeoutError)) or "timeout" in type(error).__name__.lower()
+
+
 def parse_handoff(payload: Mapping[str, Any]) -> ATLHandoff:
     """Parse an ATL MCP response without accepting model/task endpoint input."""
     if not isinstance(payload, Mapping):
@@ -192,9 +271,10 @@ class ATLClient:
         self.endpoint = endpoint
         self.timeout = timeout
 
-    async def decide(self, task: str) -> Mapping[str, Any]:
+    async def decide(self, task: str, retry_context: RetryContext | None = None) -> Mapping[str, Any]:
         try:
-            return await asyncio.to_thread(self._call, "atl_decide", {"task": task}, "decide")
+            decision_task = retry_context.to_decision_task(task) if retry_context else task
+            return await asyncio.to_thread(self._call, "atl_decide", {"task": decision_task}, "decide")
         except Exception as exc:
             raise ATLUnavailable("ATL decision was unavailable") from exc
 
@@ -207,7 +287,11 @@ class ATLClient:
             "outcome_status": status,
         }
         if details:
-            arguments["attempt_outcomes"] = [dict(details)]
+            attempt = dict(details)
+            for key in ("error_code", "failure_type", "http_status"):
+                if attempt.get(key) is not None:
+                    arguments[key] = attempt[key]
+            arguments["attempt_outcomes"] = [attempt]
         return await asyncio.to_thread(self._call, "atl_outcome", arguments, "outcome")
 
     def _call(self, tool_name: str, arguments: Mapping[str, Any], request_id: str) -> Mapping[str, Any]:
@@ -248,9 +332,10 @@ class TwoStageATLExecutor:
         self.outcome_reporter = outcome_reporter
         self.timeout = timeout
 
-    async def decide(self, task: str) -> ATLHandoff:
+    async def decide(self, task: str, retry_context: RetryContext | None = None) -> ATLHandoff:
         try:
-            raw = await _maybe_await(self.decision_client(task))
+            decision_task = retry_context.to_decision_task(task) if retry_context else task
+            raw = await _maybe_await(self.decision_client(decision_task))
         except Exception as exc:
             raise ATLUnavailable("ATL decision was unavailable") from exc
         return parse_handoff(raw)
@@ -285,17 +370,43 @@ class TwoStageATLExecutor:
             if original_agent is None:
                 raise
             return await _invoke_agent(original_agent, task)
+        try:
+            return await self._execute_stage(handoff, task, model)
+        except Exception as exc:
+            if self.outcome_reporter is not None:
+                try:
+                    await self.report_execution_result(handoff, classify_execution_error(exc))
+                except Exception:
+                    pass
+            raise
+
+    async def _execute_stage(self, handoff: ATLHandoff, task: str, model: Any) -> Any:
         tool = await self.load_selected_tool(handoff)
         agent = create_agent(model=model, tools=[tool])
-        try:
-            return await asyncio.wait_for(agent.ainvoke({"messages": [{"role": "user", "content": task}]}), timeout=self.timeout)
-        except Exception:
-            raise
+        return await asyncio.wait_for(agent.ainvoke({"messages": [{"role": "user", "content": task}]}), timeout=self.timeout)
 
     async def report_outcome(self, handoff: ATLHandoff, status: str, details: Mapping[str, Any] | None = None) -> Any:
         if self.outcome_reporter is None:
             return None
         return await _maybe_await(self.outcome_reporter(handoff, status, details))
+
+    async def report_execution_result(self, handoff: ATLHandoff, result: ExecutionResult) -> Any:
+        """Report a result without dropping provider failure classification."""
+        return await self.report_outcome(handoff, result.outcome_status, result.attempt_outcome(handoff.provider_id))
+
+    @staticmethod
+    def build_retry_context(
+        handoff: ATLHandoff,
+        result: ExecutionResult,
+        attempt_history: tuple[Mapping[str, Any], ...] = (),
+    ) -> RetryContext:
+        return RetryContext(
+            failed_provider_id=handoff.provider_id,
+            decision_reference=handoff.decision_reference,
+            outcome_correlation_token=handoff.outcome_correlation_token,
+            failure=result,
+            attempt_history=attempt_history + (result.attempt_outcome(handoff.provider_id),),
+        )
 
 
 async def _invoke_agent(agent: Any, task: str) -> Any:

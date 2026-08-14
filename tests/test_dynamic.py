@@ -16,8 +16,11 @@ from langchain_agenttrafficlab import (
     ATLHandoff,
     AuthRequired,
     DynamicLoadError,
+    ExecutionResult,
     EndpointRejected,
+    RetryContext,
     TwoStageATLExecutor,
+    classify_execution_error,
     parse_handoff,
 )
 
@@ -193,3 +196,116 @@ def test_atl_core_app_is_untouched():
         text=True,
     ).stdout.strip()
     assert changed == ""
+
+
+class HTTPErrorForTest(Exception):
+    def __init__(self, status_code):
+        self.response = SimpleNamespace(status_code=status_code)
+        super().__init__(f"HTTP {status_code}")
+
+
+def test_http_402_maps_to_payment_required():
+    result = classify_execution_error(ExceptionGroup("tool failure", [HTTPErrorForTest(402)]))
+    assert result == ExecutionResult("PAYMENT_REQUIRED", "FAILURE", "PAYMENT_REQUIRED", "payment_required", 402)
+
+
+def test_outcome_receives_structured_402_evidence_and_correlation():
+    calls = []
+    handoff = parse_handoff(response())
+    runner = TwoStageATLExecutor(
+        decision_client=lambda task: response(),
+        outcome_reporter=lambda current, status, details: calls.append((current, status, details)),
+    )
+    failure = classify_execution_error(HTTPErrorForTest(402))
+    asyncio.run(runner.report_execution_result(handoff, failure))
+    current, status, details = calls[0]
+    assert current.decision_reference == "decision-1"
+    assert current.outcome_correlation_token == "outcome-1"
+    assert status == "FAILURE"
+    assert details == {
+        "provider_id": "real:verified-provider",
+        "outcome_status": "FAILURE",
+        "error_code": "PAYMENT_REQUIRED",
+        "failure_type": "payment_required",
+        "http_status": 402,
+    }
+
+
+def test_atl_client_report_outcome_preserves_structured_fields():
+    captured = []
+    client = object.__new__(dynamic.ATLClient)
+    client._call = lambda tool, arguments, request_id: captured.append((tool, arguments)) or {"ok": True}
+    handoff = parse_handoff(response())
+    asyncio.run(client.report_outcome(handoff, "FAILURE", {
+        "provider_id": handoff.provider_id,
+        "outcome_status": "FAILURE",
+        "error_code": "PAYMENT_REQUIRED",
+        "failure_type": "payment_required",
+        "http_status": 402,
+    }))
+    tool_name, arguments = captured[0]
+    assert tool_name == "atl_outcome"
+    assert arguments["decision_reference"] == "decision-1"
+    assert arguments["outcome_correlation_token"] == "outcome-1"
+    assert arguments["provider_id"] == "real:verified-provider"
+    assert arguments["error_code"] == "PAYMENT_REQUIRED"
+    assert arguments["failure_type"] == "payment_required"
+    assert arguments["http_status"] == 402
+    assert arguments["attempt_outcomes"][0]["provider_id"] == "real:verified-provider"
+
+
+def test_retry_context_preserves_failed_provider_and_attempt_history():
+    handoff = parse_handoff(response())
+    failure = classify_execution_error(HTTPErrorForTest(402))
+    context = TwoStageATLExecutor.build_retry_context(handoff, failure)
+    assert isinstance(context, RetryContext)
+    assert context.failed_provider_id == "real:verified-provider"
+    assert context.decision_reference == "decision-1"
+    assert context.outcome_correlation_token == "outcome-1"
+    retry_task = context.to_decision_task("retry the same task")
+    assert "real:verified-provider" in retry_task
+    assert "PAYMENT_REQUIRED" in retry_task
+    assert "real:other-provider" not in retry_task
+    assert context.attempt_history[0]["http_status"] == 402
+
+
+def test_retry_decision_client_receives_context_without_fallback_selection():
+    seen = []
+    runner = TwoStageATLExecutor(decision_client=lambda task: seen.append(task) or response())
+    handoff = parse_handoff(response())
+    failure = classify_execution_error(HTTPErrorForTest(402))
+    context = runner.build_retry_context(handoff, failure)
+    asyncio.run(runner.decide("same task", retry_context=context))
+    assert len(seen) == 1
+    assert "failed_provider_id" in seen[0]
+    assert "real:verified-provider" in seen[0]
+    assert "real:other-provider" not in seen[0]
+
+
+def test_unknown_execution_error_stays_unknown():
+    result = classify_execution_error(RuntimeError("provider returned an unusable response"))
+    assert result.result_class == "UNKNOWN_FAILURE"
+    assert result.error_code == "UNKNOWN_FAILURE"
+    assert result.failure_type == "unknown_failure"
+    assert result.http_status is None
+
+
+def test_run_automatically_reports_structured_execution_failure():
+    calls = []
+
+    class FailingExecutor(TwoStageATLExecutor):
+        async def _execute_stage(self, handoff, task, model):
+            raise ExceptionGroup("provider call", [HTTPErrorForTest(402)])
+
+    runner = FailingExecutor(
+        decision_client=lambda task: response(),
+        outcome_reporter=lambda handoff, status, details: calls.append((handoff, status, details)),
+    )
+    with pytest.raises(ExceptionGroup):
+        asyncio.run(runner.run("same task", model=object()))
+    handoff, status, details = calls[0]
+    assert handoff.provider_id == "real:verified-provider"
+    assert status == "FAILURE"
+    assert details["error_code"] == "PAYMENT_REQUIRED"
+    assert details["failure_type"] == "payment_required"
+    assert details["http_status"] == 402
