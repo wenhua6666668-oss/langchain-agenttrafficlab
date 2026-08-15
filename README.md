@@ -62,6 +62,25 @@ result = await executor.run(
 
 ATL remains the decision authority. The adapter never hard-codes a fallback provider, maps providers by name or semantic similarity, or treats caller-local tools as ATL candidates. Dynamic loading is limited to ATL-known providers with a validated executable handoff.
 
+## Automatic Task-Time Routing (v0.3)
+
+`ATLTaskMiddleware` wraps the same decision/execution/outcome flow above as a single native LangChain middleware. Add it once; ATL then participates automatically at task time, with no manual `atl_decide`/`atl_outcome` calls required after setup:
+
+```python
+from langchain.agents import create_agent
+from langchain_agenttrafficlab import ATLTaskMiddleware
+
+agent = create_agent(
+    model=model,
+    tools=[],
+    middleware=[ATLTaskMiddleware()],
+)
+
+result = await agent.ainvoke({"messages": [{"role": "user", "content": "Extract the title from a public webpage into JSON."}]})
+```
+
+`ATLTaskMiddleware` is async-only (`ainvoke`/`astream`) and requires no other application-side ATL calls: it decides once per attempt, dynamically loads the ATL-selected tool for the real LangGraph execution node, reports the attempt outcome, and — on a genuine tool failure — requests exactly one fresh decision before retrying with the alternate provider.
+
 ## Failures And Failover
 
 ATL decision failure may fail open to `original_agent` when the caller supplies a safe fallback. A malformed, expired, unverifiable, or security-rejected handoff fails closed for dynamic loading. Provider connection or tool-loading failure never substitutes an unverified tool.
