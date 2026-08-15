@@ -269,6 +269,7 @@ class ATLClient:
         endpoint: str = "https://mcp.agenttrafficlab.com/mcp",
         timeout: float = 3.0,
         tenant_id: str = "public-mcp",
+        caller_id: str = "external-agent",
     ) -> None:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
@@ -276,6 +277,7 @@ class ATLClient:
         self.endpoint = endpoint
         self.timeout = timeout
         self.tenant_id = tenant_id
+        self.caller_id = caller_id
 
     async def decide(self, task: str, retry_context: RetryContext | None = None) -> Mapping[str, Any]:
         try:
@@ -292,6 +294,7 @@ class ATLClient:
             "final_provider_id": handoff.provider_id,
             "outcome_status": status,
             "tenant_id": self.tenant_id,
+            "caller_id": self.caller_id,
         }
         if details:
             attempt = dict(details)

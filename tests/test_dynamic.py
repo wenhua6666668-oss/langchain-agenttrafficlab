@@ -221,6 +221,7 @@ def test_atl_client_report_outcome_preserves_structured_fields():
     captured = []
     client = object.__new__(dynamic.ATLClient)
     client.tenant_id = "public-mcp"
+    client.caller_id = "external-agent"
     client._call = lambda tool, arguments, request_id: captured.append((tool, arguments)) or {"ok": True}
     handoff = parse_handoff(response())
     asyncio.run(client.report_outcome(handoff, "FAILURE", {
@@ -306,6 +307,7 @@ def test_atl_client_defaults_to_public_mcp_tenant(monkeypatch):
     monkeypatch.setattr(dynamic.requests, "post", _fake_post_capturing(bodies))
     client = ATLClient()
     assert client.tenant_id == "public-mcp"
+    assert client.caller_id == "external-agent"
     asyncio.run(client.decide("do something"))
     handoff = ATLHandoff(
         provider_id="real:verified-provider",
@@ -325,6 +327,7 @@ def test_atl_client_defaults_to_public_mcp_tenant(monkeypatch):
     outcome_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_outcome")
     assert "tenant_id" not in decide_call["params"]["arguments"]
     assert outcome_call["params"]["arguments"]["tenant_id"] == "public-mcp"
+    assert outcome_call["params"]["arguments"]["caller_id"] == "external-agent"
     assert outcome_call["params"]["arguments"]["decision_reference"] == "decision-1"
     assert outcome_call["params"]["arguments"]["outcome_correlation_token"] == "outcome-1"
 
@@ -332,7 +335,7 @@ def test_atl_client_defaults_to_public_mcp_tenant(monkeypatch):
 def test_atl_client_accepts_custom_tenant_id(monkeypatch):
     bodies = []
     monkeypatch.setattr(dynamic.requests, "post", _fake_post_capturing(bodies))
-    client = ATLClient(tenant_id="tenant-a")
+    client = ATLClient(tenant_id="tenant-a", caller_id="caller-a")
     handoff = ATLHandoff(
         provider_id="real:verified-provider",
         provider_name="Verified Provider",
@@ -349,6 +352,7 @@ def test_atl_client_accepts_custom_tenant_id(monkeypatch):
     asyncio.run(client.report_outcome(handoff, "FAILURE", {"error_code": "TIMEOUT"}))
     outcome_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_outcome")
     assert outcome_call["params"]["arguments"]["tenant_id"] == "tenant-a"
+    assert outcome_call["params"]["arguments"]["caller_id"] == "caller-a"
 
 
 def test_two_stage_executor_report_outcome_carries_tenant_id(monkeypatch):
