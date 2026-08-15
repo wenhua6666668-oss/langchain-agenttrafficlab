@@ -10,7 +10,20 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Agent Traffic Lab" }]
-keywords = ["langchain", "langgraph", "mcp", "middleware", "provider-routing"]
+keywords = [
+  "langchain",
+  "langgraph",
+  "mcp",
+  "middleware",
+  "provider-routing",
+  "ai-agent",
+  "agent-tools",
+  "tool-discovery",
+  "provider-discovery",
+  "failover",
+  "agent-traffic-lab",
+  "atl",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -34,6 +47,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://agenttrafficlab.com"
 Documentation = "https://agenttrafficlab.com"
+Repository = "https://github.com/wenhua6666668-oss/langchain-agenttrafficlab"
+Issues = "https://github.com/wenhua6666668-oss/langchain-agenttrafficlab/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
