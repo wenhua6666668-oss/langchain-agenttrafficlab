@@ -1,6 +1,7 @@
 """LangChain middleware for the Agent Traffic Lab decision layer."""
 
 from .middleware import ATLMiddleware
+from .task_middleware import ATLTaskMiddleware
 from .dynamic import (
 	ATLClient,
 	ATLHandoff,
@@ -22,6 +23,7 @@ __all__ = [
 	"ATLHandoff",
 	"ATLUnavailable",
 	"ATLMiddleware",
+	"ATLTaskMiddleware",
 	"AuthRequired",
 	"DynamicLoadError",
 	"ExecutionResult",
