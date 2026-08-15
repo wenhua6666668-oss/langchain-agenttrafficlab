@@ -280,7 +280,7 @@ class ATLClient:
     async def decide(self, task: str, retry_context: RetryContext | None = None) -> Mapping[str, Any]:
         try:
             decision_task = retry_context.to_decision_task(task) if retry_context else task
-            return await asyncio.to_thread(self._call, "atl_decide", {"task": decision_task, "tenant_id": self.tenant_id}, "decide")
+            return await asyncio.to_thread(self._call, "atl_decide", {"task": decision_task}, "decide")
         except Exception as exc:
             raise ATLUnavailable("ATL decision was unavailable") from exc
 

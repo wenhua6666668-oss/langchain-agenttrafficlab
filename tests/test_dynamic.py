@@ -323,7 +323,7 @@ def test_atl_client_defaults_to_public_mcp_tenant(monkeypatch):
     asyncio.run(client.report_outcome(handoff, "SUCCESS"))
     decide_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_decide")
     outcome_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_outcome")
-    assert decide_call["params"]["arguments"]["tenant_id"] == "public-mcp"
+    assert "tenant_id" not in decide_call["params"]["arguments"]
     assert outcome_call["params"]["arguments"]["tenant_id"] == "public-mcp"
     assert outcome_call["params"]["arguments"]["decision_reference"] == "decision-1"
     assert outcome_call["params"]["arguments"]["outcome_correlation_token"] == "outcome-1"
