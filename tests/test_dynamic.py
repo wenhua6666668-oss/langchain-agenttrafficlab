@@ -11,6 +11,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 import langchain_agenttrafficlab.dynamic as dynamic
 from langchain_agenttrafficlab import (
+    ATLClient,
     ATLHandoff,
     AuthRequired,
     DynamicLoadError,
@@ -219,6 +220,7 @@ def test_outcome_receives_structured_402_evidence_and_correlation():
 def test_atl_client_report_outcome_preserves_structured_fields():
     captured = []
     client = object.__new__(dynamic.ATLClient)
+    client.tenant_id = "public-mcp"
     client._call = lambda tool, arguments, request_id: captured.append((tool, arguments)) or {"ok": True}
     handoff = parse_handoff(response())
     asyncio.run(client.report_outcome(handoff, "FAILURE", {
@@ -273,6 +275,103 @@ def test_unknown_execution_error_stays_unknown():
     assert result.error_code == "UNKNOWN_FAILURE"
     assert result.failure_type == "unknown_failure"
     assert result.http_status is None
+
+
+def _fake_post_capturing(bodies):
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+        @property
+        def text(self):
+            return ""
+
+    def fake_post(url, json, headers, timeout, allow_redirects=False):
+        bodies.append(json)
+        if json["method"] == "initialize":
+            return FakeResponse({"jsonrpc": "2.0", "id": json["id"], "result": {}})
+        return FakeResponse({"jsonrpc": "2.0", "id": json["id"], "result": {"ok": True}})
+
+    return fake_post
+
+
+def test_atl_client_defaults_to_public_mcp_tenant(monkeypatch):
+    bodies = []
+    monkeypatch.setattr(dynamic.requests, "post", _fake_post_capturing(bodies))
+    client = ATLClient()
+    assert client.tenant_id == "public-mcp"
+    asyncio.run(client.decide("do something"))
+    handoff = ATLHandoff(
+        provider_id="real:verified-provider",
+        provider_name="Verified Provider",
+        capability="summarize",
+        endpoint="https://93.184.216.34/mcp",
+        transport="http",
+        tool_name="selected_tool",
+        input_schema={"type": "object"},
+        auth_required=False,
+        auth_status="not_required",
+        decision_reference="decision-1",
+        outcome_correlation_token="outcome-1",
+    )
+    asyncio.run(client.report_outcome(handoff, "SUCCESS"))
+    decide_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_decide")
+    outcome_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_outcome")
+    assert decide_call["params"]["arguments"]["tenant_id"] == "public-mcp"
+    assert outcome_call["params"]["arguments"]["tenant_id"] == "public-mcp"
+    assert outcome_call["params"]["arguments"]["decision_reference"] == "decision-1"
+    assert outcome_call["params"]["arguments"]["outcome_correlation_token"] == "outcome-1"
+
+
+def test_atl_client_accepts_custom_tenant_id(monkeypatch):
+    bodies = []
+    monkeypatch.setattr(dynamic.requests, "post", _fake_post_capturing(bodies))
+    client = ATLClient(tenant_id="tenant-a")
+    handoff = ATLHandoff(
+        provider_id="real:verified-provider",
+        provider_name="Verified Provider",
+        capability="summarize",
+        endpoint="https://93.184.216.34/mcp",
+        transport="http",
+        tool_name="selected_tool",
+        input_schema={"type": "object"},
+        auth_required=False,
+        auth_status="not_required",
+        decision_reference="decision-1",
+        outcome_correlation_token="outcome-1",
+    )
+    asyncio.run(client.report_outcome(handoff, "FAILURE", {"error_code": "TIMEOUT"}))
+    outcome_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_outcome")
+    assert outcome_call["params"]["arguments"]["tenant_id"] == "tenant-a"
+
+
+def test_two_stage_executor_report_outcome_carries_tenant_id(monkeypatch):
+    bodies = []
+    monkeypatch.setattr(dynamic.requests, "post", _fake_post_capturing(bodies))
+    atl = ATLClient(tenant_id="tenant-b")
+    executor = TwoStageATLExecutor(decision_client=atl.decide, outcome_reporter=atl.report_outcome)
+    handoff = ATLHandoff(
+        provider_id="real:verified-provider",
+        provider_name="Verified Provider",
+        capability="summarize",
+        endpoint="https://93.184.216.34/mcp",
+        transport="http",
+        tool_name="selected_tool",
+        input_schema={"type": "object"},
+        auth_required=False,
+        auth_status="not_required",
+        decision_reference="decision-1",
+        outcome_correlation_token="outcome-1",
+    )
+    asyncio.run(executor.report_outcome(handoff, "SUCCESS"))
+    outcome_call = next(b for b in bodies if b["method"] == "tools/call" and b["params"].get("name") == "atl_outcome")
+    assert outcome_call["params"]["arguments"]["tenant_id"] == "tenant-b"
 
 
 def test_run_automatically_reports_structured_execution_failure():

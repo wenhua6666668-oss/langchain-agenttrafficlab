@@ -264,17 +264,23 @@ def _now_ms() -> int:
 class ATLClient:
     """Minimal MCP client for ATL decision and outcome calls."""
 
-    def __init__(self, endpoint: str = "https://mcp.agenttrafficlab.com/mcp", timeout: float = 3.0) -> None:
+    def __init__(
+        self,
+        endpoint: str = "https://mcp.agenttrafficlab.com/mcp",
+        timeout: float = 3.0,
+        tenant_id: str = "public-mcp",
+    ) -> None:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         validate_endpoint(endpoint)
         self.endpoint = endpoint
         self.timeout = timeout
+        self.tenant_id = tenant_id
 
     async def decide(self, task: str, retry_context: RetryContext | None = None) -> Mapping[str, Any]:
         try:
             decision_task = retry_context.to_decision_task(task) if retry_context else task
-            return await asyncio.to_thread(self._call, "atl_decide", {"task": decision_task}, "decide")
+            return await asyncio.to_thread(self._call, "atl_decide", {"task": decision_task, "tenant_id": self.tenant_id}, "decide")
         except Exception as exc:
             raise ATLUnavailable("ATL decision was unavailable") from exc
 
@@ -285,6 +291,7 @@ class ATLClient:
             "provider_id": handoff.provider_id,
             "final_provider_id": handoff.provider_id,
             "outcome_status": status,
+            "tenant_id": self.tenant_id,
         }
         if details:
             attempt = dict(details)
